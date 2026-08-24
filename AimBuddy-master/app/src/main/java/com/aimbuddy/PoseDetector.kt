@@ -1,53 +1,104 @@
 package com.example.poseresearch
 
-object PoseDecoder {
+import android.content.Context
+import android.graphics.Bitmap
+import com.google.ai.edge.litert.Accelerator
+import com.google.ai.edge.litert.CompiledModel
 
-    private const val KEYPOINT_COUNT = 18
+class PoseDetector(
+    context: Context
+) {
 
-    fun decode(
-        output: FloatArray
-    ): PoseResult {
+    companion object {
+        private const val INPUT_SIZE = 256
+    }
 
-        require(output.size == 32 * 32 * 19) {
-            "Unexpected output size: ${output.size}"
-        }
-
-        val points = ArrayList<PoseKeypoint>(
-            KEYPOINT_COUNT
+    private val model: CompiledModel =
+        CompiledModel.create(
+            context.assets,
+            "models/pose_256_fp16.tflite",
+            CompiledModel.Options(
+                Accelerator.GPU
+            ),
+            null
         )
 
-        for (keypoint in 0 until KEYPOINT_COUNT) {
+    private val inputs =
+        model.createInputBuffers()
 
-            var bestScore = Float.NEGATIVE_INFINITY
-            var bestX = 0
-            var bestY = 0
+    private val outputs =
+        model.createOutputBuffers()
 
-            for (y in 0 until 32) {
+    fun detect(
+        source: Bitmap
+    ): PoseResult {
 
-                for (x in 0 until 32) {
+        val bitmap = Bitmap.createScaledBitmap(
+            source,
+            INPUT_SIZE,
+            INPUT_SIZE,
+            true
+        )
 
-                    val index =
-                        (y * 32 + x) * 19 + keypoint
-
-                    val score = output[index]
-
-                    if (score > bestScore) {
-                        bestScore = score
-                        bestX = x
-                        bestY = y
-                    }
-                }
-            }
-
-            points.add(
-                PoseKeypoint(
-                    x = bestX / 31f,
-                    y = bestY / 31f,
-                    score = bestScore
-                )
+        val pixels =
+            IntArray(
+                INPUT_SIZE * INPUT_SIZE
             )
+
+        bitmap.getPixels(
+            pixels,
+            0,
+            INPUT_SIZE,
+            0,
+            0,
+            INPUT_SIZE,
+            INPUT_SIZE
+        )
+
+        val input =
+            FloatArray(
+                INPUT_SIZE *
+                    INPUT_SIZE *
+                    3
+            )
+
+        var index = 0
+
+        for (pixel in pixels) {
+
+            val r =
+                (pixel shr 16) and 0xFF
+
+            val g =
+                (pixel shr 8) and 0xFF
+
+            val b =
+                pixel and 0xFF
+
+            input[index++] =
+                (r - 128f) / 256f
+
+            input[index++] =
+                (g - 128f) / 256f
+
+            input[index++] =
+                (b - 128f) / 256f
         }
 
-        return PoseResult(points)
+        inputs[0].writeFloat(input)
+
+        model.run(
+            inputs,
+            outputs
+        )
+
+        val output =
+            outputs[0].readFloat()
+
+        return PoseDecoder.decode(output)
+    }
+
+    fun close() {
+        model.destroy()
     }
 }
